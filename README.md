@@ -1,35 +1,13 @@
-# Backend — Voice Expense API
+# Voice Expense API (Backend)
 
-A minimal FastAPI backend that accepts an audio recording, transcribes it with OpenAI Whisper, extracts expense entities with GPT, and returns structured JSON.
+FastAPI backend that accepts an audio recording, transcribes it with OpenAI, extracts expense entities, and returns structured JSON.
 
-The extraction prompt and JSON schema live in `backend/main.py` (`EXPENSE_PARSER_SYSTEM_PROMPT` and `EXTRACTION_SCHEMA`).
+## API
 
-## Local development
+- `GET /` → health check
+- `POST /voice-expense` → `multipart/form-data` with field `audio`
 
-```bash
-cd backend
-
-# 1. Create a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Set your OpenAI key
-export OPENAI_API_KEY="sk-..."
-
-# 4. Start the server
-uvicorn main:app --reload --port 8000
-```
-
-Test it with curl:
-```bash
-curl -X POST http://localhost:8000/voice-expense \
-  -F "audio=@/path/to/your/recording.m4a"
-```
-
-Expected response:
+Response example:
 ```json
 {
   "transcript": "paid 300 to zomato by UPI",
@@ -42,39 +20,53 @@ Expected response:
 }
 ```
 
----
+## Environment variables
 
-## Deploy to Railway (free)
+- `OPENAI_API_KEY` (required)
 
-1. **Sign up** at [railway.app](https://railway.app) (free $5/month credit, no credit card needed)
+## Local development
 
-2. **Install Railway CLI** (optional — you can also use their GitHub integration):
-   ```bash
-   brew install railway
-   ```
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 
-3. **Login and deploy**:
-   ```bash
-   cd backend
-   railway login
-   railway init        # creates a new project
-   railway up          # deploys the backend
-   ```
+pip install -r requirements.txt
 
-4. **Set your environment variable** in the Railway dashboard:
-   - Go to your project → Variables
-   - Add `OPENAI_API_KEY` = `sk-...`
+export OPENAI_API_KEY="sk-..."
+uvicorn main:app --reload --port 8000
+```
 
-5. **Get your public URL** from the Railway dashboard (looks like `https://xxx.up.railway.app`)
+Test:
+```bash
+curl -X POST http://localhost:8000/voice-expense \
+  -F "audio=@/path/to/your/recording.m4a"
+```
 
-6. **Update the app** — open `src/ExpenseTrackerApp.tsx` and change:
-   ```typescript
-   const VOICE_API_URL = "https://YOUR_APP.up.railway.app/voice-expense";
-   //                      ↑ replace with your actual Railway URL
-   ```
+Health:
+```bash
+curl http://localhost:8000/
+```
 
----
+## Deploy (Railway)
 
-## Why not Vercel?
+This repo includes `railway.toml` (Nixpacks build + `uvicorn` start command).
 
-Vercel's free tier has a **10-second execution timeout** and **4.5MB request payload limit**. OpenAI Whisper + GPT together commonly take 12–20 seconds, so Vercel will time out. Railway has no timeout on HTTP responses.
+1. Create a Railway project (via GitHub integration or CLI).
+2. Set `OPENAI_API_KEY` in Railway → Variables.
+3. Deploy.
+4. Verify:
+   - `https://YOUR_APP.up.railway.app/` returns `{"status":"ok"...}`
+   - `https://YOUR_APP.up.railway.app/docs` loads FastAPI docs
+
+## Connect the frontend
+
+In the Netlify site for the frontend, set:
+
+- `EXPO_PUBLIC_VOICE_API_URL` = `https://YOUR_APP.up.railway.app/voice-expense`
+
+Then redeploy the frontend.
+
+## Production notes
+
+- CORS is currently open (`allow_origins=["*"]`). Tighten it to your Netlify domain when you’re ready.
+- Keep `OPENAI_API_KEY` on the server only.
