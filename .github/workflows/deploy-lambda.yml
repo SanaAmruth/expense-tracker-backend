@@ -24,6 +24,10 @@ jobs:
           aws-region: us-east-1
       
       - name: Deploy to Lambda
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Optional override (otherwise deploy.sh defaults to your Netlify URL)
+          # ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
         run: |
           set -euo pipefail
           if [ -f "expense-tracker-backend/deploy.sh" ]; then

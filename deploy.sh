@@ -61,9 +61,16 @@ fi
 
 # Step 3: Add environment variables
 echo "🔐 Setting environment variables..."
+ALLOWED_ORIGINS_VALUE="${ALLOWED_ORIGINS:-https://expense-tracker-frontend-a.netlify.app}"
+
+if [ -z "${OPENAI_API_KEY:-}" ]; then
+    echo "❌ OPENAI_API_KEY is not set. Add it as a GitHub Actions secret and pass it to the workflow." >&2
+    exit 1
+fi
+
 aws lambda update-function-configuration \
     --function-name "$FUNCTION_NAME" \
-    --environment "Variables={ALLOWED_ORIGINS=https://expense-tracker-frontend-a.netlify.app}" \
+    --environment "Variables={ALLOWED_ORIGINS=$ALLOWED_ORIGINS_VALUE,OPENAI_API_KEY=$OPENAI_API_KEY}" \
     --region "$REGION" > /dev/null
 
 echo "✅ Environment variables set"
