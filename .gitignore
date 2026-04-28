@@ -47,6 +47,7 @@ lambda_requirements.txt
 # AWS
 .aws/
 aws_credentials.csv
+local-secrets/
 
 # Testing
 .pytest_cache/
