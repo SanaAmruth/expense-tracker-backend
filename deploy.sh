@@ -20,7 +20,8 @@ mkdir lambda_package
 cd lambda_package
 
 # Install dependencies
-pip3 install -r ../requirements-lambda.txt -t .
+python -m pip install --upgrade pip
+python -m pip install -r ../requirements-lambda.txt -t .
 
 # Copy application code
 cp ../main.py .
