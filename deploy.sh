@@ -88,14 +88,24 @@ if [ -z "$API_ID" ]; then
         --region "$REGION" \
         --query 'id' \
         --output text)
-    
-    ROOT_ID=$(aws apigateway get-resources \
-        --rest-api-id "$API_ID" \
-        --region "$REGION" \
-        --query 'items[0].id' \
-        --output text)
-    
-    # Create proxy resource
+fi
+
+echo "✅ Using API Gateway: $API_ID"
+
+ROOT_ID=$(aws apigateway get-resources \
+    --rest-api-id "$API_ID" \
+    --region "$REGION" \
+    --query 'items[?path==`/`].id | [0]' \
+    --output text)
+
+# Ensure proxy resource exists (catches /anything)
+PROXY_RESOURCE=$(aws apigateway get-resources \
+    --rest-api-id "$API_ID" \
+    --region "$REGION" \
+    --query 'items[?pathPart==`{proxy+}`].id | [0]' \
+    --output text)
+
+if [ -z "$PROXY_RESOURCE" ] || [ "$PROXY_RESOURCE" = "None" ]; then
     PROXY_RESOURCE=$(aws apigateway create-resource \
         --rest-api-id "$API_ID" \
         --parent-id "$ROOT_ID" \
@@ -103,46 +113,47 @@ if [ -z "$API_ID" ]; then
         --region "$REGION" \
         --query 'id' \
         --output text)
-    
-    # Create method
+fi
+
+LAMBDA_URI="arn:aws:apigateway:$REGION:lambda:path/2015-03-31/functions/arn:aws:lambda:$REGION:$(aws sts get-caller-identity --query Account --output text):function:$FUNCTION_NAME/invocations"
+
+# Important: configure BOTH "/" and "/{proxy+}".
+# If "/" isn't configured, hitting the base URL often returns:
+# {"message":"Missing Authentication Token"}
+for RESOURCE_ID in "$ROOT_ID" "$PROXY_RESOURCE"; do
     aws apigateway put-method \
         --rest-api-id "$API_ID" \
-        --resource-id "$PROXY_RESOURCE" \
+        --resource-id "$RESOURCE_ID" \
         --http-method ANY \
         --authorization-type NONE \
-        --region "$REGION" > /dev/null
-    
-    # Set Lambda integration
+        --region "$REGION" > /dev/null 2>&1 || true
+
     aws apigateway put-integration \
         --rest-api-id "$API_ID" \
-        --resource-id "$PROXY_RESOURCE" \
+        --resource-id "$RESOURCE_ID" \
         --http-method ANY \
         --type AWS_PROXY \
         --integration-http-method POST \
-        --uri "arn:aws:apigateway:$REGION:lambda:path/2015-03-31/functions/arn:aws:lambda:$REGION:$(aws sts get-caller-identity --query Account --output text):function:$FUNCTION_NAME/invocations" \
+        --uri "$LAMBDA_URI" \
         --region "$REGION" > /dev/null
-    
-    # Add Lambda permission
-    aws lambda add-permission \
-        --function-name "$FUNCTION_NAME" \
-        --statement-id apigateway-access \
-        --action lambda:InvokeFunction \
-        --principal apigateway.amazonaws.com \
-        --source-arn "arn:aws:execute-api:$REGION:$(aws sts get-caller-identity --query Account --output text):$API_ID/*/*" \
-        --region "$REGION" 2>/dev/null || true
-    
-    # Deploy API
-    aws apigateway create-deployment \
-        --rest-api-id "$API_ID" \
-        --stage-name "prod" \
-        --region "$REGION" > /dev/null
-    
-    API_ENDPOINT="https://$API_ID.execute-api.$REGION.amazonaws.com/prod"
-    echo "✅ API Gateway created"
-else
-    echo "✅ API Gateway already exists"
-    API_ENDPOINT="https://$API_ID.execute-api.$REGION.amazonaws.com/prod"
-fi
+done
+
+# Add/ensure Lambda permission (idempotent)
+aws lambda add-permission \
+    --function-name "$FUNCTION_NAME" \
+    --statement-id apigateway-access \
+    --action lambda:InvokeFunction \
+    --principal apigateway.amazonaws.com \
+    --source-arn "arn:aws:execute-api:$REGION:$(aws sts get-caller-identity --query Account --output text):$API_ID/*/*" \
+    --region "$REGION" 2>/dev/null || true
+
+# Always (re)deploy API so changes take effect
+aws apigateway create-deployment \
+    --rest-api-id "$API_ID" \
+    --stage-name "prod" \
+    --region "$REGION" > /dev/null
+
+API_ENDPOINT="https://$API_ID.execute-api.$REGION.amazonaws.com/prod"
 
 # Step 5: Display results
 echo ""
