@@ -3,12 +3,16 @@ import os
 import re
 import textwrap
 from io import BytesIO
+import logging
+import mimetypes
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
+from openai import BadRequestError
 
 client = OpenAI()  # reads OPENAI_API_KEY from env
+logger = logging.getLogger("voice-expense-api")
 
 app = FastAPI(title="Voice Expense API")
 
@@ -195,18 +199,34 @@ def normalize_result(data: dict) -> dict:
     return result
 
 
-def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
+def _guess_mime_type(filename: str, provided: str | None) -> str:
+    if provided and provided != "application/octet-stream":
+        return provided
+    guessed, _ = mimetypes.guess_type(filename or "")
+    return guessed or "application/octet-stream"
+
+
+def transcribe_audio(audio_bytes: bytes, filename: str, content_type: str | None) -> str:
     """Send raw audio bytes to OpenAI Whisper and return the transcript."""
     if len(audio_bytes) < 2000:
         raise ValueError("Audio too short — please record a longer clip.")
 
     # Wrap bytes in a file-like object. OpenAI SDK needs a (filename, bytes, mime) tuple.
-    audio_file = (filename, BytesIO(audio_bytes), "audio/mpeg")
+    mime_type = _guess_mime_type(filename, content_type)
+    audio_file = (filename, BytesIO(audio_bytes), mime_type)
 
-    transcript = client.audio.transcriptions.create(
-        model="whisper-1",
-        file=audio_file,
-    )
+    try:
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+        )
+    except BadRequestError as exc:
+        # Common: format mismatch (e.g., webm/m4a sent as audio/mpeg) or corrupted/empty audio.
+        logger.exception("OpenAI transcription bad request")
+        raise ValueError("Audio format not supported or could not be decoded. Please try again.") from exc
+    except Exception as exc:
+        logger.exception("OpenAI transcription failed")
+        raise RuntimeError("Transcription service error") from exc
 
     text = (transcript.text or "").strip()
     if not text:
@@ -217,17 +237,21 @@ def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
 
 def extract_entities(text: str) -> dict:
     """Send transcript to GPT and extract structured expense fields."""
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=[
-            {
-                "role": "system",
-                "content": EXPENSE_PARSER_SYSTEM_PROMPT,
-            },
-            {"role": "user", "content": text},
-        ],
-        text={"format": EXTRACTION_SCHEMA},
-    )
+    try:
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=[
+                {
+                    "role": "system",
+                    "content": EXPENSE_PARSER_SYSTEM_PROMPT,
+                },
+                {"role": "user", "content": text},
+            ],
+            text={"format": EXTRACTION_SCHEMA},
+        )
+    except Exception as exc:
+        logger.exception("OpenAI entity extraction failed")
+        raise RuntimeError("Extraction service error") from exc
 
     data = _coerce_json_object(response.output_text)
     return normalize_result(data)
@@ -258,12 +282,18 @@ async def voice_expense(audio: UploadFile = File(...)):
     """
     audio_bytes = await audio.read()
     filename = audio.filename or "recording.m4a"
+    content_type = audio.content_type
 
     try:
-        transcript = transcribe_audio(audio_bytes, filename)
+        transcript = transcribe_audio(audio_bytes, filename, content_type)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Transcription failed. Please try again.") from exc
 
-    entities = extract_entities(transcript)
+    try:
+        entities = extract_entities(transcript)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="AI extraction failed. Please try again.") from exc
 
     return {"transcript": transcript, **entities}
