@@ -12,11 +12,17 @@ client = OpenAI()  # reads OPENAI_API_KEY from env
 
 app = FastAPI(title="Voice Expense API")
 
+# Configure CORS with environment variable support
+# In production, set ALLOWED_ORIGINS to your Netlify domain
+# Example: ALLOWED_ORIGINS="https://yourdomain.netlify.app,https://yourdomain.com"
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+allowed_origins = [origin.strip() for origin in allowed_origins]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tighten to your Expo domain in production
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
