@@ -201,8 +201,13 @@ def normalize_result(data: dict) -> dict:
 
 def _guess_mime_type(filename: str, provided: str | None) -> str:
     if provided and provided != "application/octet-stream":
+        # Normalize common aliases to what decoders expect.
+        if provided in {"audio/m4a", "audio/x-m4a"}:
+            return "audio/mp4"
         return provided
     guessed, _ = mimetypes.guess_type(filename or "")
+    if guessed in {"audio/x-m4a"}:
+        return "audio/mp4"
     return guessed or "application/octet-stream"
 
 
@@ -213,6 +218,13 @@ def transcribe_audio(audio_bytes: bytes, filename: str, content_type: str | None
 
     # Wrap bytes in a file-like object. OpenAI SDK needs a (filename, bytes, mime) tuple.
     mime_type = _guess_mime_type(filename, content_type)
+    logger.info(
+        "Transcribe request: filename=%s content_type=%s mime_type=%s bytes=%d",
+        filename,
+        content_type,
+        mime_type,
+        len(audio_bytes),
+    )
     audio_file = (filename, BytesIO(audio_bytes), mime_type)
 
     try:
