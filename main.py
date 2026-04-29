@@ -259,24 +259,16 @@ def transcribe_audio(audio_bytes: bytes, filename: str, content_type: str | None
 
         with open(tmp_path, "rb") as f:
             try:
-                # Prefer the newer transcribe model (more robust format handling).
+                # Use whisper-1, the standard and most reliable transcription model
                 transcript = client.audio.transcriptions.create(
-                    model="gpt-4o-mini-transcribe",
+                    model="whisper-1",
                     file=f,
                 )
             except BadRequestError as exc:
-                # Retry with Whisper if the newer model rejects for any reason.
                 logger.exception("OpenAI transcription bad request")
-                try:
-                    f.seek(0)
-                    transcript = client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=f,
-                    )
-                except Exception:
-                    raise ValueError(
-                        "Audio format not supported or could not be decoded. Please try again."
-                    ) from exc
+                raise ValueError(
+                    "Audio format not supported or could not be decoded. Please try again."
+                ) from exc
             except Exception as exc:
                 logger.exception("OpenAI transcription failed")
                 raise RuntimeError("Transcription service error") from exc
