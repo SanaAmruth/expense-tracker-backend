@@ -5,6 +5,7 @@ import textwrap
 from io import BytesIO
 import logging
 import mimetypes
+import tempfile
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -202,6 +203,7 @@ def normalize_result(data: dict) -> dict:
 def _guess_mime_type(filename: str, provided: str | None) -> str:
     if provided and provided != "application/octet-stream":
         # Normalize common aliases to what decoders expect.
+        provided = provided.split(";", 1)[0].strip()
         if provided in {"audio/m4a", "audio/x-m4a"}:
             return "audio/mp4"
         return provided
@@ -227,28 +229,60 @@ def transcribe_audio(audio_bytes: bytes, filename: str, content_type: str | None
     )
     if audio_bytes:
         logger.info("Audio header (first 16 bytes): %s", audio_bytes[:16].hex())
-    audio_file = (filename, BytesIO(audio_bytes), mime_type)
+    # Some clients send codec parameters (e.g. audio/webm;codecs=opus).
+    # The OpenAI SDK and backend decoders handle plain MIME types best.
+    mime_type = mime_type.split(";", 1)[0].strip()
 
+    # Write to a real temp file so the server-side decoder can reliably infer format.
+    suffix = ""
+    if "." in (filename or ""):
+        suffix = "." + filename.rsplit(".", 1)[-1]
+    else:
+        suffix = {
+            "audio/webm": ".webm",
+            "video/webm": ".webm",
+            "audio/ogg": ".ogg",
+            "audio/wav": ".wav",
+            "audio/mpeg": ".mp3",
+            "audio/mp4": ".m4a",
+        }.get(mime_type, "")
+
+    tmp_path = None
     try:
-        # Prefer the newer transcribe model (more robust format handling).
-        transcript = client.audio.transcriptions.create(
-            model="gpt-4o-mini-transcribe",
-            file=audio_file,
-        )
-    except BadRequestError as exc:
-        # Common: format mismatch (e.g., webm/m4a sent as audio/mpeg) or corrupted/empty audio.
-        logger.exception("OpenAI transcription bad request")
-        # Retry with Whisper if the newer model rejects for any reason.
-        try:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-            )
-        except Exception:
-            raise ValueError("Audio format not supported or could not be decoded. Please try again.") from exc
-    except Exception as exc:
-        logger.exception("OpenAI transcription failed")
-        raise RuntimeError("Transcription service error") from exc
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(audio_bytes)
+            tmp.flush()
+            tmp_path = tmp.name
+
+        with open(tmp_path, "rb") as f:
+            try:
+                # Prefer the newer transcribe model (more robust format handling).
+                transcript = client.audio.transcriptions.create(
+                    model="gpt-4o-mini-transcribe",
+                    file=f,
+                )
+            except BadRequestError as exc:
+                # Retry with Whisper if the newer model rejects for any reason.
+                logger.exception("OpenAI transcription bad request")
+                try:
+                    f.seek(0)
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=f,
+                    )
+                except Exception:
+                    raise ValueError(
+                        "Audio format not supported or could not be decoded. Please try again."
+                    ) from exc
+            except Exception as exc:
+                logger.exception("OpenAI transcription failed")
+                raise RuntimeError("Transcription service error") from exc
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     text = (transcript.text or "").strip()
     if not text:
