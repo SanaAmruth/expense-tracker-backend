@@ -14,6 +14,9 @@ from openai import BadRequestError
 
 client = OpenAI()  # reads OPENAI_API_KEY from env
 logger = logging.getLogger("voice-expense-api")
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO)
+logger.setLevel(logging.INFO)
 
 app = FastAPI(title="Voice Expense API")
 
